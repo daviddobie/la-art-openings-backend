@@ -1,0 +1,32 @@
+{
+  "name": "la-art-openings-backend",
+  "version": "1.0.0",
+  "description": "LA Art Openings backend API",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@trpc/server": "11.7.2",
+    "axios": "^1.13.2",
+    "cookie": "^1.1.1",
+    "dotenv": "^16.6.1",
+    "drizzle-orm": "^0.44.7",
+    "express": "^4.22.1",
+    "jose": "6.1.0",
+    "mysql2": "^3.16.0",
+    "superjson": "^1.13.3",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.25",
+    "@types/node": "^22.19.3",
+    "esbuild": "^0.25.12",
+    "typescript": "~5.9.3"
+  },
+  "engines": {
+    "node": "18.x || 20.x"
+  }
+}
