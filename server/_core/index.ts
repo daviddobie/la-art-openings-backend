@@ -121,16 +121,13 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
-  // Enable CORS for all routes - reflect the request origin to support credentials
+  // Enable CORS for all routes
   app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    if (origin) {
-      res.header("Access-Control-Allow-Origin", origin);
-    }
+    res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.header(
       "Access-Control-Allow-Headers",
-      "Origin, X-Requested-With, Content-Type, Accept, Authorization",
+      "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-admin-password",
     );
     res.header("Access-Control-Allow-Credentials", "true");
 
@@ -138,17 +135,6 @@ async function startServer() {
     if (req.method === "OPTIONS") {
       res.sendStatus(200);
       return;
-    }
-    next();
-  });
-
-  // CORS middleware for Chrome extension and admin panel
-  app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-admin-password");
-    if (req.method === "OPTIONS") {
-      return res.sendStatus(200);
     }
     next();
   });
