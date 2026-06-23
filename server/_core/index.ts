@@ -272,15 +272,18 @@ async function startServer() {
       const ext = contentType.split("/")[1] || "jpg";
       const fileName = body.fileName || `event-${Date.now()}.${ext}`;
 
-      const FormDataPackage = (await import("form-data")).default;
-      const formData = new FormDataPackage();
-      formData.append("image", buffer, { filename: fileName, contentType });
-      formData.append("password", adminPassword);
-
+      const base64Image = buffer.toString("base64");
       const uploadResponse = await fetch("https://thelosangelesartgallery.com/upload.php", {
         method: "POST",
-        headers: formData.getHeaders(),
-        body: formData as any,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          password: adminPassword,
+          image: base64Image,
+          fileName: fileName,
+          contentType: contentType,
+        }),
       });
 
       if (!uploadResponse.ok) {
