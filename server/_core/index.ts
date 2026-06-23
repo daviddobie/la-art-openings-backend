@@ -275,13 +275,11 @@ async function startServer() {
       const FormDataPackage = (await import("form-data")).default;
       const formData = new FormDataPackage();
       formData.append("image", buffer, { filename: fileName, contentType });
+      formData.append("password", adminPassword);
 
       const uploadResponse = await fetch("https://thelosangelesartgallery.com/upload.php", {
         method: "POST",
-        headers: {
-          "x-admin-password": adminPassword,
-          ...formData.getHeaders(),
-        },
+        headers: formData.getHeaders(),
         body: formData as any,
       });
 
