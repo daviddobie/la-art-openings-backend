@@ -34,7 +34,6 @@ export const appRouter = router({
           openingTime: z.string().optional(),
           bodyText: z.string().optional(),
           imageUrl: z.string().optional(),
-          thumbImageUrl: z.string().optional(),
           lat: z.string().optional(),
           lng: z.string().optional(),
           adminPassword: z.string(),

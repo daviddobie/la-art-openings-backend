@@ -26,7 +26,6 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
 // Art opening events table
-// Note: thumbImageUrl stores the 300px thumbnail for list views (optimized for mobile)
 export const events = mysqlTable("events", {
   id: int("id").autoincrement().primaryKey(),
   title: varchar("title", { length: 512 }).notNull(),
@@ -37,7 +36,6 @@ export const events = mysqlTable("events", {
   openingTime: varchar("openingTime", { length: 255 }),
   bodyText: text("bodyText"),
   imageUrl: text("imageUrl"),
-  thumbImageUrl: text("thumbImageUrl"),
   lat: varchar("lat", { length: 32 }),
   lng: varchar("lng", { length: 32 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -46,6 +44,3 @@ export const events = mysqlTable("events", {
 
 export type Event = typeof events.$inferSelect;
 export type InsertEvent = typeof events.$inferInsert;
-
-// Migration note: Added thumbImageUrl column for optimized thumbnails
-// Run: pnpm db:push
