@@ -261,7 +261,6 @@ async function startServer() {
         return res.status(401).json({ error: "Unauthorized" });
       }
 
-      const { storagePut } = await import("../storage.js");
       const body = req.body as { imageData?: string; contentType?: string; fileName?: string };
       if (!body.imageData) {
         return res.status(400).json({ error: "imageData is required" });
@@ -272,10 +271,30 @@ async function startServer() {
       const contentType = body.contentType || "image/jpeg";
       const ext = contentType.split("/")[1] || "jpg";
       const fileName = body.fileName || `event-${Date.now()}.${ext}`;
-      const key = `events/${fileName}`;
 
-      const { url } = await storagePut(key, buffer, contentType);
-      return res.json({ url });
+      const FormDataPackage = (await import("form-data")).default;
+      const formData = new FormDataPackage();
+      formData.append("image", buffer, { filename: fileName, contentType });
+
+      const uploadResponse = await fetch("https://thelosangelesartgallery.com/upload.php", {
+        method: "POST",
+        headers: {
+          "x-admin-password": adminPassword,
+          ...formData.getHeaders(),
+        },
+        body: formData as any,
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error(`GreenGeeks upload failed: ${uploadResponse.statusText}`);
+      }
+
+      const result = await uploadResponse.json() as { success?: boolean; imageUrl?: string; error?: string };
+      if (!result.success || !result.imageUrl) {
+        throw new Error(result.error || "Upload failed");
+      }
+
+      return res.json({ url: result.imageUrl });
     } catch (error) {
       console.error("Image upload error:", error);
       return res.status(500).json({ error: String(error) });
