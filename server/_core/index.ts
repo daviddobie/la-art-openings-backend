@@ -290,12 +290,15 @@ async function startServer() {
         throw new Error(`GreenGeeks upload failed: ${uploadResponse.statusText}`);
       }
 
-      const result = await uploadResponse.json() as { success?: boolean; imageUrl?: string; error?: string };
+      const result = await uploadResponse.json() as { success?: boolean; imageUrl?: string; thumbUrl?: string; error?: string };
       if (!result.success || !result.imageUrl) {
         throw new Error(result.error || "Upload failed");
       }
 
-      return res.json({ url: result.imageUrl });
+      return res.json({ 
+        url: result.imageUrl,
+        thumbUrl: result.thumbUrl || result.imageUrl // fallback to main image if thumb not available
+      });
     } catch (error) {
       console.error("Image upload error:", error);
       return res.status(500).json({ error: String(error) });
