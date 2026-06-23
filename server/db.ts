@@ -100,7 +100,11 @@ export async function getAllEvents() {
 export async function createEvent(data: InsertEvent) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(events).values(data);
+  // Remove undefined values so Drizzle doesn't try to insert 'default'
+  const cleanData = Object.fromEntries(
+    Object.entries(data).filter(([_, v]) => v !== undefined)
+  ) as InsertEvent;
+  const result = await db.insert(events).values(cleanData);
   return (result as any).insertId as number;
 }
 
