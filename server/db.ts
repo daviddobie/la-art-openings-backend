@@ -1,4 +1,4 @@
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { InsertUser, users, events, InsertEvent } from "../drizzle/schema";
 import { ENV } from "./_core/env";
@@ -112,4 +112,32 @@ export async function deleteEvent(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(events).where(eq(events.id, id));
+}
+
+export async function deleteAllEvents() {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(events);
+}
+
+export async function checkDuplicateEvent(title: string, galleryName: string, openingDate: string) {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db
+    .select()
+    .from(events)
+    .where(
+      // Check if event with same title, gallery, and opening date exists
+      // Using SQL LIKE for flexible date matching (handles different date formats)
+    )
+    .limit(1);
+  
+  // Simple check: look for exact title + gallery + date match
+  const existing = await db.select().from(events).limit(1000);
+  return existing.some(
+    (e) =>
+      e.title.toLowerCase() === title.toLowerCase() &&
+      e.galleryName.toLowerCase() === galleryName.toLowerCase() &&
+      e.openingDate === openingDate
+  );
 }

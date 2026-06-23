@@ -44,6 +44,15 @@ export const appRouter = router({
         if (input.adminPassword !== adminPassword) {
           throw new Error("Unauthorized");
         }
+        // Check for duplicates
+        const isDuplicate = await db.checkDuplicateEvent(
+          input.title,
+          input.galleryName,
+          input.openingDate
+        );
+        if (isDuplicate) {
+          throw new Error("Event already exists with same title, gallery, and date");
+        }
         const { adminPassword: _, ...eventData } = input;
         const id = await db.createEvent(eventData);
         return { id };
@@ -57,6 +66,17 @@ export const appRouter = router({
           throw new Error("Unauthorized");
         }
         await db.deleteEvent(input.id);
+        return { success: true };
+      }),
+
+    deleteAll: publicProcedure
+      .input(z.object({ adminPassword: z.string() }))
+      .mutation(async ({ input }) => {
+        const adminPassword = process.env.ADMIN_PASSWORD || "laartadmin2024";
+        if (input.adminPassword !== adminPassword) {
+          throw new Error("Unauthorized");
+        }
+        await db.deleteAllEvents();
         return { success: true };
       }),
   }),
