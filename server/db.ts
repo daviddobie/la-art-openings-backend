@@ -120,19 +120,18 @@ export async function deleteAllEvents() {
   await db.delete(events);
 }
 
-export async function checkDuplicateEvent(title: string, galleryName: string, openingDate: string) {
+export async function checkDuplicateEvent(title: string, galleryName: string) {
   const db = await getDb();
   if (!db) return false;
   
-  // Query database for existing event with same title, gallery, and date
+  // Query database for existing event with same title and gallery
   const existing = await db
     .select()
     .from(events)
     .where(
       and(
         eq(events.title, title),
-        eq(events.galleryName, galleryName),
-        eq(events.openingDate, openingDate)
+        eq(events.galleryName, galleryName)
       )
     )
     .limit(1);

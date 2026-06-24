@@ -44,17 +44,17 @@ export const appRouter = router({
         if (input.adminPassword !== adminPassword) {
           throw new Error("Unauthorized");
         }
-        const { adminPassword: _, ...eventData } = input;
-        try {
-          const id = await db.createEvent(eventData);
-          return { id };
-        } catch (err: any) {
-          // Handle MySQL duplicate key error (from unique constraint)
-          if (err.code === "ER_DUP_ENTRY" || err.message?.includes("Duplicate entry")) {
-            throw new Error("Event already exists with same title, gallery, and date");
-          }
-          throw err;
+        // Check for duplicates based on title + gallery
+        const isDuplicate = await db.checkDuplicateEvent(
+          input.title,
+          input.galleryName
+        );
+        if (isDuplicate) {
+          throw new Error("Event already exists at this gallery");
         }
+        const { adminPassword: _, ...eventData } = input;
+        const id = await db.createEvent(eventData);
+        return { id };
       }),
 
     delete: publicProcedure
