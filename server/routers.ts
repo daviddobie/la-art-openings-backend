@@ -177,15 +177,15 @@ Respond with ONLY a JSON object in this exact format:
 
 Where "order" is an array of stop numbers (1-indexed) in the optimal sequence.`;
 
-          // Call the Manus LLM service via the backend
-          const response = await fetch("https://api.manus.im/v1/chat/completions", {
+          // Call the Groq LLM service via the backend
+          const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: `Bearer ${process.env.MANUS_API_KEY || ""}`,
+              Authorization: `Bearer ${process.env.GROQ_API_KEY || ""}`,
             },
             body: JSON.stringify({
-              model: "gpt-4-turbo",
+              model: "llama-3.3-70b-versatile",
               messages: [
                 {
                   role: "user",
