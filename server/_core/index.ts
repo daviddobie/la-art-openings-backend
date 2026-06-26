@@ -305,6 +305,97 @@ async function startServer() {
     }
   });
 
+  // Direct REST endpoint for itinerary optimization (simpler than tRPC for mobile)
+  app.post("/api/optimize-itinerary", async (req, res) => {
+    try {
+      const { stops } = req.body;
+      
+      if (!Array.isArray(stops) || stops.length === 0) {
+        return res.status(400).json({ error: "Invalid stops array" });
+      }
+
+      // Build a prompt for the AI to optimize the itinerary
+      const stopsDescription = stops
+        .map(
+          (stop, idx) =>
+            `${idx + 1}. ${stop.title}${stop.time ? ` (${stop.time})` : ""}${stop.address ? ` at ${stop.address}` : ""}`
+        )
+        .join("\n");
+
+      const prompt = `You are an expert trip planner. Optimize this Los Angeles art gallery itinerary for the best route considering:
+1. Time windows (when galleries are open)
+2. Geographic proximity (minimize travel time)
+3. Logical flow (visit nearby galleries in sequence)
+
+Current stops:
+${stopsDescription}
+
+Respond with ONLY a JSON object in this exact format:
+{
+  "order": [1, 3, 2, 4, 5],
+  "reasoning": "Brief explanation of why this order is optimal"
+}
+
+Where "order" is an array of stop numbers (1-indexed) in the optimal sequence.`;
+
+      // Call the Groq LLM service
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.GROQ_API_KEY || ""}`,
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+          temperature: 0.7,
+          max_tokens: 500,
+        }),
+      });
+
+      if (!response.ok) {
+        console.warn("AI optimization failed, returning original order");
+        return res.json({
+          order: stops.map((_, idx) => idx),
+          reasoning: "Could not optimize - using original order",
+        });
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content || "";
+
+      // Parse the JSON response
+      const jsonMatch = content.match(/\{[^}]+\}/);
+      if (!jsonMatch) {
+        console.warn("Could not parse AI response, returning original order");
+        return res.json({
+          order: stops.map((_, idx) => idx),
+          reasoning: "Could not parse AI response",
+        });
+      }
+
+      const result = JSON.parse(jsonMatch[0]);
+      // Convert 1-indexed to 0-indexed
+      const optimizedOrder = result.order.map((n) => n - 1);
+
+      return res.json({
+        order: optimizedOrder,
+        reasoning: result.reasoning || "Optimized by AI",
+      });
+    } catch (error) {
+      console.error("Itinerary optimization error:", error);
+      return res.status(500).json({
+        error: "Optimization failed",
+        order: req.body.stops?.map((_, idx) => idx) || [],
+      });
+    }
+  });
+
   app.use(
     "/api/trpc",
     createExpressMiddleware({
