@@ -1,4 +1,3 @@
-import { COOKIE_NAME } from "../shared/const.js";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
@@ -50,22 +49,30 @@ export const appRouter = router({
           input.galleryName
         );
         if (isDuplicate) {
-          throw new Error("Event already exists at this gallery");
+          throw new Error("Event already exists with same title, gallery, and date");
         }
-        const { adminPassword: _, ...eventData } = input;
-        const id = await db.createEvent(eventData);
-        return { id };
+        return await db.createEvent({
+          title: input.title,
+          galleryName: input.galleryName,
+          address: input.address,
+          openingDate: input.openingDate,
+          endDate: input.endDate,
+          openingTime: input.openingTime,
+          bodyText: input.bodyText,
+          imageUrl: input.imageUrl,
+          lat: input.lat,
+          lng: input.lng,
+        });
       }),
 
     delete: publicProcedure
-      .input(z.object({ id: z.number(), adminPassword: z.string() }))
+      .input(z.object({ id: z.string(), adminPassword: z.string() }))
       .mutation(async ({ input }) => {
         const adminPassword = process.env.ADMIN_PASSWORD || "laartadmin2024";
         if (input.adminPassword !== adminPassword) {
           throw new Error("Unauthorized");
         }
-        await db.deleteEvent(input.id);
-        return { success: true };
+        return await db.deleteEvent(input.id);
       }),
 
     deleteAll: publicProcedure
@@ -75,36 +82,30 @@ export const appRouter = router({
         if (input.adminPassword !== adminPassword) {
           throw new Error("Unauthorized");
         }
-        await db.deleteAllEvents();
-        return { success: true };
+        return await db.deleteAllEvents();
       }),
   }),
 
-  // Geocoding endpoint for address search
   geocode: router({
     search: publicProcedure
       .input(z.object({ query: z.string() }))
       .query(async ({ input }) => {
         try {
           const response = await fetch(
-            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(input.query)}&city=Los%20Angeles&state=California&format=json&limit=5`,
+            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(input.query)}&format=json&limit=5`,
             { headers: { "User-Agent": "LA-Art-Openings-App" } }
           );
           if (!response.ok) return { results: [] };
           const data = await response.json();
-          if (!Array.isArray(data)) return { results: [] };
-          const results = data
-            .filter((item: any) => item && item.address)
-            .map((item: any, index: number) => ({
-              id: `${index}-${item.osm_id}`,
-              address: item.address?.road || item.address?.pedestrian || item.name || item.display_name,
-              city: item.address?.city || "Los Angeles",
-              state: item.address?.state || "CA",
-              zipCode: item.address?.postcode || "",
-              displayName: item.display_name,
-              lat: parseFloat(item.lat),
-              lng: parseFloat(item.lon),
-            }));
+          const results = (data as any[]).map((item) => ({
+            address: item.address?.road || item.display_name || "",
+            city: item.address?.city || "Los Angeles",
+            state: item.address?.state || "CA",
+            zipCode: item.address?.postcode || "",
+            displayName: item.display_name,
+            lat: parseFloat(item.lat),
+            lng: parseFloat(item.lon),
+          }));
           return { results };
         } catch (error) {
           console.error("Geocoding error:", error);
@@ -128,6 +129,109 @@ export const appRouter = router({
         } catch (error) {
           console.error("Geocoding coordinates error:", error);
           return { lat: null, lng: null };
+        }
+      }),
+  }),
+
+  // AI-powered itinerary optimization
+  itinerary: router({
+    optimize: publicProcedure
+      .input(
+        z.object({
+          stops: z.array(
+            z.object({
+              id: z.string(),
+              title: z.string(),
+              time: z.string().optional(),
+              address: z.string().optional(),
+              lat: z.number().optional(),
+              lng: z.number().optional(),
+              isStartingLocation: z.boolean().optional(),
+            })
+          ),
+        })
+      )
+      .query(async ({ input }) => {
+        try {
+          // Build a prompt for the AI to optimize the itinerary
+          const stopsDescription = input.stops
+            .map(
+              (stop, idx) =>
+                `${idx + 1}. ${stop.title}${stop.time ? ` (${stop.time})` : ""}${stop.address ? ` at ${stop.address}` : ""}`
+            )
+            .join("\n");
+
+          const prompt = `You are an expert trip planner. Optimize this Los Angeles art gallery itinerary for the best route considering:
+1. Time windows (when galleries are open)
+2. Geographic proximity (minimize travel time)
+3. Logical flow (visit nearby galleries in sequence)
+
+Current stops:
+${stopsDescription}
+
+Respond with ONLY a JSON object in this exact format:
+{
+  "order": [1, 3, 2, 4, 5],
+  "reasoning": "Brief explanation of why this order is optimal"
+}
+
+Where "order" is an array of stop numbers (1-indexed) in the optimal sequence.`;
+
+          // Call the Manus LLM service via the backend
+          const response = await fetch("https://api.manus.im/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${process.env.MANUS_API_KEY || ""}`,
+            },
+            body: JSON.stringify({
+              model: "gpt-4-turbo",
+              messages: [
+                {
+                  role: "user",
+                  content: prompt,
+                },
+              ],
+              temperature: 0.7,
+              max_tokens: 500,
+            }),
+          });
+
+          if (!response.ok) {
+            console.warn("AI optimization failed, returning original order");
+            return {
+              order: input.stops.map((_, idx) => idx),
+              reasoning: "Could not optimize - using original order",
+            };
+          }
+
+          const data = await response.json();
+          const content = data.choices?.[0]?.message?.content || "";
+
+          // Parse the JSON response
+          const jsonMatch = content.match(/\{[^}]+\}/);
+          if (!jsonMatch) {
+            console.warn("Could not parse AI response, returning original order");
+            return {
+              order: input.stops.map((_, idx) => idx),
+              reasoning: "Could not parse AI response",
+            };
+          }
+
+          const result = JSON.parse(jsonMatch[0]);
+          // Convert 1-indexed to 0-indexed
+          const optimizedOrder = result.order.map((n: number) => n - 1);
+
+          return {
+            order: optimizedOrder,
+            reasoning: result.reasoning || "Optimized by AI",
+          };
+        } catch (error) {
+          console.error("Itinerary optimization error:", error);
+          return {
+            order: input.stops.map((_, idx) => idx),
+            reasoning: "Error during optimization",
+          };
         }
       }),
   }),
