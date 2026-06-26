@@ -359,7 +359,9 @@ Where "order" is an array of stop numbers (1-indexed) in the optimal sequence.`;
       });
 
       if (!response.ok) {
-        console.warn("AI optimization failed, returning original order");
+        const errorText = await response.text();
+        console.warn(`AI optimization failed (${response.status}):`, errorText);
+        console.warn(`GROQ_API_KEY present: ${!!process.env.GROQ_API_KEY}`);
         return res.json({
           order: stops.map((_, idx) => idx),
           reasoning: "Could not optimize - using original order",
