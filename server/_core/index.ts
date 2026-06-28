@@ -272,40 +272,34 @@ async function startServer() {
       const ext = contentType.split("/")[1] || "jpg";
       const fileName = body.fileName || `event-${Date.now()}.${ext}`;
 
-      const base64Image = buffer.toString("base64");
+      const FormDataPackage = (await import("form-data")).default;
+      const formData = new FormDataPackage();
+      formData.append("image", buffer, { filename: fileName, contentType });
+      formData.append("password", adminPassword);
+
       const uploadResponse = await fetch("https://thelosangelesartgallery.com/upload.php", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          password: adminPassword,
-          image: base64Image,
-          fileName: fileName,
-          contentType: contentType,
-        }),
+        headers: formData.getHeaders(),
+        body: formData as any,
       });
 
       if (!uploadResponse.ok) {
         throw new Error(`GreenGeeks upload failed: ${uploadResponse.statusText}`);
       }
 
-      const result = await uploadResponse.json() as { success?: boolean; imageUrl?: string; thumbUrl?: string; error?: string };
+      const result = await uploadResponse.json() as { success?: boolean; imageUrl?: string; error?: string };
       if (!result.success || !result.imageUrl) {
         throw new Error(result.error || "Upload failed");
       }
 
-      return res.json({ 
-        url: result.imageUrl,
-        thumbUrl: result.thumbUrl || result.imageUrl // fallback to main image if thumb not available
-      });
+      return res.json({ url: result.imageUrl });
     } catch (error) {
       console.error("Image upload error:", error);
       return res.status(500).json({ error: String(error) });
     }
   });
 
-  // Direct REST endpoint for itinerary optimization (simpler than tRPC for mobile)
+  // Direct REST endpoint for itinerary optimization
   app.post("/api/optimize-itinerary", async (req, res) => {
     try {
       const { stops } = req.body;
@@ -322,40 +316,46 @@ async function startServer() {
         )
         .join("\n");
 
-      const prompt = `You are an expert trip planner. Optimize this Los Angeles art gallery itinerary for the best route considering:
-1. Time windows (when galleries are open)
-2. Geographic proximity (minimize travel time)
-3. Logical flow (visit nearby galleries in sequence)
+      const stopCount = stops.length;
+      const prompt = `You are an expert trip planner optimizing a Los Angeles art gallery itinerary.
+
+You have EXACTLY ${stopCount} stops listed below. You must return EXACTLY ${stopCount} numbers in your order array — no more, no less.
 
 Current stops:
 ${stopsDescription}
 
-Respond with ONLY a JSON object in this exact format:
+RULES:
+1. Keep stop 1 (Home/starting location) FIRST always
+2. Sort remaining stops by opening time — EARLIEST opening time comes first
+3. For stops with the same opening time, order by geographic proximity to minimize travel
+4. Return ONLY the stop numbers that appear in the list above — do NOT invent new stops
+
+Respond with ONLY a JSON object:
 {
-  "order": [1, 3, 2, 4, 5],
-  "reasoning": "Brief explanation of why this order is optimal"
+  "order": [1, 3, 2],
+  "reasoning": "Brief explanation"
 }
 
-Where "order" is an array of stop numbers (1-indexed) in the optimal sequence.`;
+The "order" array must contain EXACTLY ${stopCount} numbers, each between 1 and ${stopCount}, with no duplicates and no omissions.`;
 
       // Call the Groq LLM service
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.GROQ_API_KEY || ""}`,
+          Authorization: `Bearer ${process.env.GROQ_API_KEY || ""}`
         },
         body: JSON.stringify({
           model: "llama-3.3-70b-versatile",
           messages: [
             {
               role: "user",
-              content: prompt,
-            },
+              content: prompt
+            }
           ],
           temperature: 0.7,
-          max_tokens: 500,
-        }),
+          max_tokens: 500
+        })
       });
 
       if (!response.ok) {
@@ -364,7 +364,7 @@ Where "order" is an array of stop numbers (1-indexed) in the optimal sequence.`;
         console.warn(`GROQ_API_KEY present: ${!!process.env.GROQ_API_KEY}`);
         return res.json({
           order: stops.map((_, idx) => idx),
-          reasoning: "Could not optimize - using original order",
+          reasoning: "Could not optimize - using original order"
         });
       }
 
@@ -377,23 +377,37 @@ Where "order" is an array of stop numbers (1-indexed) in the optimal sequence.`;
         console.warn("Could not parse AI response, returning original order");
         return res.json({
           order: stops.map((_, idx) => idx),
-          reasoning: "Could not parse AI response",
+          reasoning: "Could not parse AI response"
         });
       }
 
       const result = JSON.parse(jsonMatch[0]);
       // Convert 1-indexed to 0-indexed
-      const optimizedOrder = result.order.map((n) => n - 1);
+      const rawOrder: number[] = result.order.map((n: number) => n - 1);
+      
+      // Validate: must have exactly the right number of unique valid indices
+      const validIndices = new Set(stops.map((_, i) => i));
+      const uniqueOrder = [...new Set(rawOrder)].filter(i => validIndices.has(i));
+      
+      // If validation fails, fall back to original order
+      if (uniqueOrder.length !== stops.length) {
+        console.warn(`[Groq] Invalid order length: got ${uniqueOrder.length}, expected ${stops.length}. Falling back.`);
+        return res.json({
+          order: stops.map((_, idx) => idx),
+          reasoning: "Could not validate AI response - using original order"
+        });
+      }
 
+      console.log(`[Groq] Optimized order:`, uniqueOrder, `| Reasoning:`, result.reasoning);
       return res.json({
-        order: optimizedOrder,
-        reasoning: result.reasoning || "Optimized by AI",
+        order: uniqueOrder,
+        reasoning: result.reasoning || "Optimized by AI"
       });
     } catch (error) {
       console.error("Itinerary optimization error:", error);
       return res.status(500).json({
         error: "Optimization failed",
-        order: req.body.stops?.map((_, idx) => idx) || [],
+        order: req.body.stops?.map((_: any, idx: number) => idx) || []
       });
     }
   });
