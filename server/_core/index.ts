@@ -303,18 +303,44 @@ async function startServer() {
   app.post("/api/optimize-itinerary", async (req, res) => {
     try {
       const { stops } = req.body;
-      
       if (!Array.isArray(stops) || stops.length === 0) {
         return res.status(400).json({ error: "Invalid stops array" });
       }
 
-      // Build a prompt for the AI to optimize the itinerary
+      // Pre-calculate haversine distances between all stop pairs (in miles)
+      function haversine(lat1: number, lng1: number, lat2: number, lng2: number): number {
+        const R = 3958.8;
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLng = (lng2 - lng1) * Math.PI / 180;
+        const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      }
+
+      const hasCoords = stops.some((s: any) => s.lat && s.lng);
       const stopsDescription = stops
-        .map(
-          (stop, idx) =>
-            `${idx + 1}. ${stop.title}${stop.time ? ` (${stop.time})` : ""}${stop.address ? ` at ${stop.address}` : ""}`
-        )
+        .map((stop: any, idx: number) => {
+          return `${idx + 1}. ${stop.title}${stop.time ? ` (${stop.time})` : ''}${stop.address ? ` at ${stop.address}` : ''}`;
+        })
         .join("\n");
+
+      // Build distance matrix so Groq doesn't need to estimate distances
+      let distanceMatrix = '';
+      if (hasCoords) {
+        const lines: string[] = [];
+        for (let i = 0; i < stops.length; i++) {
+          for (let j = i + 1; j < stops.length; j++) {
+            const si = stops[i] as any;
+            const sj = stops[j] as any;
+            if (si.lat && si.lng && sj.lat && sj.lng) {
+              const dist = haversine(Number(si.lat), Number(si.lng), Number(sj.lat), Number(sj.lng));
+              lines.push(`Stop ${i+1} → Stop ${j+1}: ${dist.toFixed(1)} miles`);
+            }
+          }
+        }
+        if (lines.length > 0) {
+          distanceMatrix = `\n\nPRE-CALCULATED DISTANCES (use these exact numbers — do NOT estimate):\n${lines.join('\n')}`;
+        }
+      }
 
       const stopCount = stops.length;
       const prompt = `You are an expert trip planner optimizing a Los Angeles art gallery itinerary.
@@ -322,12 +348,12 @@ async function startServer() {
 You have EXACTLY ${stopCount} stops listed below. You must return EXACTLY ${stopCount} numbers in your order array — no more, no less.
 
 Current stops:
-${stopsDescription}
+${stopsDescription}${distanceMatrix}
 
 RULES:
 1. Keep stop 1 (Home/starting location) FIRST always
 2. Sort remaining stops by opening time — EARLIEST opening time comes first
-3. For stops with the same opening time, order by geographic proximity to minimize travel
+3. For stops with similar opening times (within 30 minutes of each other), use the pre-calculated distances above to pick the geographically nearest stop to the previous one — this minimizes backtracking
 4. Return ONLY the stop numbers that appear in the list above — do NOT invent new stops
 
 Respond with ONLY a JSON object:
@@ -338,7 +364,6 @@ Respond with ONLY a JSON object:
 
 The "order" array must contain EXACTLY ${stopCount} numbers, each between 1 and ${stopCount}, with no duplicates and no omissions.`;
 
-      // Call the Groq LLM service
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -347,23 +372,17 @@ The "order" array must contain EXACTLY ${stopCount} numbers, each between 1 and 
         },
         body: JSON.stringify({
           model: "llama-3.3-70b-versatile",
-          messages: [
-            {
-              role: "user",
-              content: prompt
-            }
-          ],
-          temperature: 0.7,
-          max_tokens: 500
-        })
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.1,
+          max_tokens: 600
+        } )
       });
 
       if (!response.ok) {
         const errorText = await response.text();
         console.warn(`AI optimization failed (${response.status}):`, errorText);
-        console.warn(`GROQ_API_KEY present: ${!!process.env.GROQ_API_KEY}`);
         return res.json({
-          order: stops.map((_, idx) => idx),
+          order: stops.map((_: any, idx: number) => idx),
           reasoning: "Could not optimize - using original order"
         });
       }
@@ -371,29 +390,28 @@ The "order" array must contain EXACTLY ${stopCount} numbers, each between 1 and 
       const data = await response.json();
       const content = data.choices?.[0]?.message?.content || "";
 
-      // Parse the JSON response
-      const jsonMatch = content.match(/\{[^}]+\}/);
-      if (!jsonMatch) {
-        console.warn("Could not parse AI response, returning original order");
+      // Extract JSON — handle multi-line responses
+      let result: any = null;
+      try {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('No JSON found');
+        result = JSON.parse(jsonMatch[0]);
+      } catch (parseErr) {
+        console.warn("Could not parse AI response:", content);
         return res.json({
-          order: stops.map((_, idx) => idx),
+          order: stops.map((_: any, idx: number) => idx),
           reasoning: "Could not parse AI response"
         });
       }
 
-      const result = JSON.parse(jsonMatch[0]);
-      // Convert 1-indexed to 0-indexed
       const rawOrder: number[] = result.order.map((n: number) => n - 1);
-      
-      // Validate: must have exactly the right number of unique valid indices
-      const validIndices = new Set(stops.map((_, i) => i));
+      const validIndices = new Set(stops.map((_: any, i: number) => i));
       const uniqueOrder = [...new Set(rawOrder)].filter(i => validIndices.has(i));
-      
-      // If validation fails, fall back to original order
+
       if (uniqueOrder.length !== stops.length) {
         console.warn(`[Groq] Invalid order length: got ${uniqueOrder.length}, expected ${stops.length}. Falling back.`);
         return res.json({
-          order: stops.map((_, idx) => idx),
+          order: stops.map((_: any, idx: number) => idx),
           reasoning: "Could not validate AI response - using original order"
         });
       }
@@ -411,6 +429,7 @@ The "order" array must contain EXACTLY ${stopCount} numbers, each between 1 and 
       });
     }
   });
+
 
   app.use(
     "/api/trpc",
