@@ -64,6 +64,42 @@ export const appRouter = router({
         await db.deleteEvent(input.id);
         return { success: true };
       }),
+
+    update: publicProcedure
+      .input(
+        z.object({
+          id: z.coerce.number().int().positive(),
+          title: z.string().min(1).max(512),
+          galleryName: z.string().min(1).max(255),
+          address: z.string().min(1),
+          openingDate: z.string().min(1),
+          endDate: z.string().optional(),
+          openingTime: z.string().optional(),
+          bodyText: z.string().optional(),
+          imageUrl: z.string().optional(),
+          adminPassword: z.string(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const adminPassword = process.env.ADMIN_PASSWORD || "laartadmin2024";
+        if (input.adminPassword !== adminPassword) {
+          throw new Error("Unauthorized");
+        }
+        const { adminPassword: _, id, ...eventData } = input;
+        await db.updateEvent(id, eventData);
+        return { success: true };
+      }),
+
+    deleteAll: publicProcedure
+      .input(z.object({ adminPassword: z.string() }))
+      .mutation(async ({ input }) => {
+        const adminPassword = process.env.ADMIN_PASSWORD || "laartadmin2024";
+        if (input.adminPassword !== adminPassword) {
+          throw new Error("Unauthorized");
+        }
+        await db.deleteAllEvents();
+        return { success: true };
+      }),
   }),
 
   // Geocoding endpoint for address search

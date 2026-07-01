@@ -1,4 +1,4 @@
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { InsertUser, users, events, InsertEvent } from "../drizzle/schema";
 import { ENV } from "./_core/env";
@@ -7,20 +7,12 @@ let _db: ReturnType<typeof drizzle> | null = null;
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
-  if (!_db) {
-    // Try multiple environment variable names for database URL
-    const dbUrl = process.env.DATABASE_URL || process.env.DATABASE_PRIVATE_URL || process.env.MYSQL_URL;
-    if (dbUrl) {
-      try {
-        console.log("[Database] Connecting to database...");
-        _db = drizzle(dbUrl);
-        console.log("[Database] Connected successfully");
-      } catch (error) {
-        console.error("[Database] Failed to connect:", error);
-        _db = null;
-      }
-    } else {
-      console.warn("[Database] No DATABASE_URL environment variable found");
+  if (!_db && process.env.DATABASE_URL) {
+    try {
+      _db = drizzle(process.env.DATABASE_URL);
+    } catch (error) {
+      console.warn("[Database] Failed to connect:", error);
+      _db = null;
     }
   }
   return _db;
@@ -108,11 +100,7 @@ export async function getAllEvents() {
 export async function createEvent(data: InsertEvent) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  // Remove undefined values so Drizzle doesn't try to insert 'default'
-  const cleanData = Object.fromEntries(
-    Object.entries(data).filter(([_, v]) => v !== undefined)
-  ) as InsertEvent;
-  const result = await db.insert(events).values(cleanData);
+  const result = await db.insert(events).values(data);
   return (result as any).insertId as number;
 }
 
@@ -122,36 +110,14 @@ export async function deleteEvent(id: number) {
   await db.delete(events).where(eq(events.id, id));
 }
 
+export async function updateEvent(id: number, data: Partial<Omit<InsertEvent, 'id'>>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(events).set(data).where(eq(events.id, id));
+}
+
 export async function deleteAllEvents() {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(events);
-}
-export async function updateEvent(id: number, data: Partial<InsertEvent>) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const cleanData = Object.fromEntries(
-    Object.entries(data).filter(([_, v]) => v !== undefined)
-  ) as Partial<InsertEvent>;
-  await db.update(events).set(cleanData).where(eq(events.id, id));
-}
-
-
-export async function checkDuplicateEvent(title: string, galleryName: string) {
-  const db = await getDb();
-  if (!db) return false;
-  
-  // Query database for existing event with same title and gallery
-  const existing = await db
-    .select()
-    .from(events)
-    .where(
-      and(
-        eq(events.title, title),
-        eq(events.galleryName, galleryName)
-      )
-    )
-    .limit(1);
-  
-  return existing.length > 0;
 }
