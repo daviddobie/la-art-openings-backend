@@ -64,6 +64,33 @@ export const appRouter = router({
           lng: input.lng,
         });
       }),
+    update: publicProcedure
+      .input(
+        z.object({
+          id: z.number(),
+          title: z.string().min(1).max(512).optional(),
+          galleryName: z.string().min(1).max(255).optional(),
+          address: z.string().optional(),
+          openingDate: z.string().optional(),
+          endDate: z.string().optional(),
+          openingTime: z.string().optional(),
+          bodyText: z.string().optional(),
+          imageUrl: z.string().optional(),
+          lat: z.string().optional(),
+          lng: z.string().optional(),
+          adminPassword: z.string(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const adminPassword = process.env.ADMIN_PASSWORD || "laartadmin2024";
+        if (input.adminPassword !== adminPassword) {
+          throw new Error("Unauthorized");
+        }
+        const { id, adminPassword: _pw, ...fields } = input;
+        await db.updateEvent(id, fields);
+        return { success: true };
+      }),
+
 
     delete: publicProcedure
       .input(z.object({ id: z.string(), adminPassword: z.string() }))
