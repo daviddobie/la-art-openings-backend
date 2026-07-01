@@ -343,6 +343,9 @@ async function startServer() {
       }
 
       const stopCount = stops.length;
+      const geoRule = distanceMatrix
+        ? `3. For stops with similar opening times (within 30 minutes of each other), use the pre-calculated distances above to pick the geographically nearest stop to the previous one — this minimizes backtracking`
+        : `3. When opening times are identical or very close, keep the original relative order — do NOT try to guess geography from addresses`;
       const prompt = `You are an expert trip planner optimizing a Los Angeles art gallery itinerary.
 
 You have EXACTLY ${stopCount} stops listed below. You must return EXACTLY ${stopCount} numbers in your order array — no more, no less.
