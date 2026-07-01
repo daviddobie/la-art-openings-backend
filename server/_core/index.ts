@@ -210,7 +210,8 @@ async function startServer() {
 
             // Try Photon (Komoot) — designed for autocomplete, no rate limit issues
       try {
-        const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(query )}&limit=6&lang=en&lat=34.05&lon=-118.24`;
+                const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(query )}&limit=8&lang=en&lat=34.05&lon=-118.24&bbox=-124.48,32.53,-114.13,42.01`;
+
         const response = await fetch(photonUrl, {
           headers: { 'User-Agent': 'LA-Art-Openings-App' },
         });
@@ -243,7 +244,13 @@ async function startServer() {
                   lng: feature.geometry?.coordinates?.[0],
                 };
               })
-              .filter((item: any) => item.displayName && item.displayName.length > 3);
+                           .filter((item: any) => {
+                if (!item.displayName || item.displayName.length <= 3) return false;
+                // Hard-filter: only keep California results
+                const st = (item.state || '').toLowerCase();
+                return st === 'california' || st === 'ca';
+              });
+
 
             if (results.length > 0) {
               geocodeCache.set(cacheKey, { results, timestamp: Date.now() });
