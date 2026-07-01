@@ -255,36 +255,7 @@ async function startServer() {
         console.error('Photon autocomplete error:', error);
       }
 
-          {
-            headers: {
-              'User-Agent': 'LA-Art-Openings-App',
-            },
-          }
-        );
 
-        if (response.ok) {
-          const data = await response.json();
-          if (Array.isArray(data) && data.length > 0) {
-            const results = data
-              .map((item: any, index: number) => ({
-                id: `nominatim-${index}-${item.osm_id}`,
-                address: item.address?.road || item.address?.pedestrian || item.name || '',
-                city: item.address?.city || 'Los Angeles',
-                state: item.address?.state || 'CA',
-                zipCode: item.address?.postcode || '',
-                displayName: item.display_name || item.name || '',
-              }))
-              .filter((item: any) => item.displayName);
-
-            if (results.length > 0) {
-              geocodeCache.set(cacheKey, { results, timestamp: Date.now() });
-              return res.json({ results });
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Nominatim fallback error:', error);
-      }
 
       // No results found
       res.json({ results: [] });
