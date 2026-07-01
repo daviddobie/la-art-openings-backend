@@ -355,8 +355,8 @@ ${stopsDescription}${distanceMatrix}
 
 RULES:
 1. Keep stop 1 (Home/starting location) FIRST always
-2. Sort remaining stops by opening time — EARLIEST opening time comes first
-3. For stops with similar opening times (within 30 minutes of each other), use the pre-calculated distances above to pick the geographically nearest stop to the previous one — this minimizes backtracking
+2. Sort remaining stops by opening time — EARLIEST opening time comes first. Parse times like "2pm", "2:00 PM", "2pm to 3pm" all as 2:00 PM.
+${geoRule}
 4. Return ONLY the stop numbers that appear in the list above — do NOT invent new stops
 
 Respond with ONLY a JSON object:
