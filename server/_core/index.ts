@@ -208,11 +208,53 @@ async function startServer() {
         return res.json({ results: localResults });
       }
 
-      // Try Nominatim as fallback for addresses not in our local database
+            // Try Photon (Komoot) — designed for autocomplete, no rate limit issues
       try {
-        const searchQuery = query.includes("Los Angeles") ? query : query + " Los Angeles";
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchQuery)}&format=json&limit=5`,
+        const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(query )}&limit=6&lang=en&lat=34.05&lon=-118.24`;
+        const response = await fetch(photonUrl, {
+          headers: { 'User-Agent': 'LA-Art-Openings-App' },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.features && Array.isArray(data.features) && data.features.length > 0) {
+            const results = data.features
+              .map((feature: any, index: number) => {
+                const p = feature.properties || {};
+                const street = p.street || '';
+                const housenumber = p.housenumber || '';
+                const streetAddress = housenumber ? `${housenumber} ${street}` : street;
+                const name = p.name || '';
+                const city = p.city || p.town || p.village || 'Los Angeles';
+                const state = p.state || 'CA';
+                const postcode = p.postcode || '';
+                const parts = [name, streetAddress, city, state && postcode ? `${state} ${postcode}` : state].filter(Boolean);
+                const displayName = parts.join(', ');
+                const addressLine = streetAddress || name || city;
+                return {
+                  id: `photon-${index}-${feature.properties?.osm_id || index}`,
+                  address: addressLine,
+                  city,
+                  state,
+                  zipCode: postcode,
+                  displayName,
+                  venueName: name,
+                  lat: feature.geometry?.coordinates?.[1],
+                  lng: feature.geometry?.coordinates?.[0],
+                };
+              })
+              .filter((item: any) => item.displayName && item.displayName.length > 3);
+
+            if (results.length > 0) {
+              geocodeCache.set(cacheKey, { results, timestamp: Date.now() });
+              return res.json({ results });
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Photon autocomplete error:', error);
+      }
+
           {
             headers: {
               'User-Agent': 'LA-Art-Openings-App',
