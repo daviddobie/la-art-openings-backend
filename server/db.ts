@@ -127,6 +127,15 @@ export async function deleteAllEvents() {
   if (!db) throw new Error("Database not available");
   await db.delete(events);
 }
+export async function updateEvent(id: number, data: Partial<InsertEvent>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const cleanData = Object.fromEntries(
+    Object.entries(data).filter(([_, v]) => v !== undefined)
+  ) as Partial<InsertEvent>;
+  await db.update(events).set(cleanData).where(eq(events.id, id));
+}
+
 
 export async function checkDuplicateEvent(title: string, galleryName: string) {
   const db = await getDb();
