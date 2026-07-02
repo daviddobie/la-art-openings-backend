@@ -100,6 +100,17 @@ export const appRouter = router({
         return { success: true };
       }),
 
+    cleanupPast: publicProcedure
+      .input(z.object({ adminPassword: z.string() }))
+      .mutation(async ({ input }) => {
+        const adminPassword = process.env.ADMIN_PASSWORD || "laartadmin2024";
+        if (input.adminPassword !== adminPassword) {
+          throw new Error("Unauthorized");
+        }
+        const deleted = await db.deleteExpiredEvents();
+        return { success: true, deleted };
+      }),
+
     deleteAll: publicProcedure
       .input(z.object({ adminPassword: z.string() }))
       .mutation(async ({ input }) => {
