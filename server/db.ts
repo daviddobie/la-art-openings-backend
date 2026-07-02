@@ -97,6 +97,93 @@ export async function getAllEvents() {
   return db.select().from(events).orderBy(desc(events.createdAt));
 }
 
+/** Normalise a string for fuzzy comparison: lowercase, strip punctuation/extra spaces */
+function normalise(s: string): string {
+  return (s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Extract just the street number + first word of street name from an address */
+function addressKey(addr: string): string {
+  const m = addr.match(/(\d+)\s+([a-zA-Z]+)/);
+  return m ? `${m[1]} ${m[2].toLowerCase()}` : normalise(addr).slice(0, 20);
+}
+
+/** Normalise a date string to YYYY-MM-DD or a comparable token */
+function dateKey(d: string): string {
+  if (!d) return '';
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+  // Try parsing common formats like "July 11, 2026" or "Jul. 11, 2026"
+  const months: Record<string, string> = {
+    jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+    jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+  };
+  const m = d.match(/([a-zA-Z]+)\.?\s+(\d{1,2}),?\s+(\d{4})/);
+  if (m) {
+    const mon = months[m[1].toLowerCase().slice(0, 3)] || '00';
+    return `${m[3]}-${mon}-${m[2].padStart(2, '0')}`;
+  }
+  return normalise(d).slice(0, 10);
+}
+
+/** Returns true if two titles are similar: one contains the other, or they share ≥60% of words */
+function similarTitle(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const na = normalise(a);
+  const nb = normalise(b);
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const wa = new Set(na.split(' ').filter(w => w.length > 2));
+  const wb = nb.split(' ').filter(w => w.length > 2);
+  if (wa.size === 0 || wb.length === 0) return false;
+  const shared = wb.filter(w => wa.has(w)).length;
+  return shared / Math.max(wa.size, wb.length) >= 0.6;
+}
+
+/**
+ * Check if a near-duplicate of this event already exists.
+ *
+ * Skip if:
+ *   - gallery name + date + address all match (exact fuzzy), regardless of title
+ *   - gallery name + date + address all match AND titles are similar
+ */
+export async function findDuplicateEvent(
+  galleryName: string,
+  openingDate: string,
+  address: string,
+  title: string
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const all = await db.select({
+    galleryName: events.galleryName,
+    openingDate: events.openingDate,
+    address: events.address,
+    title: events.title,
+  }).from(events);
+
+  const inGallery = normalise(galleryName);
+  const inDate = dateKey(openingDate);
+  const inAddr = addressKey(address);
+
+  return all.some(row => {
+    const sameGallery = normalise(row.galleryName) === inGallery;
+    const sameDate = dateKey(row.openingDate) === inDate && inDate !== '';
+    const sameAddr = addressKey(row.address) === inAddr && inAddr.length > 3;
+    // All three hard signals match → always a duplicate
+    if (sameGallery && sameDate && sameAddr) return true;
+    // Gallery + date match AND titles are similar → duplicate
+    if (sameGallery && sameDate && similarTitle(row.title, title)) return true;
+    // Gallery + address match AND titles are similar → duplicate
+    if (sameGallery && sameAddr && similarTitle(row.title, title)) return true;
+    return false;
+  });
+}
+
 export async function createEvent(data: InsertEvent) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
