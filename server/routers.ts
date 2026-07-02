@@ -45,8 +45,18 @@ export const appRouter = router({
           throw new Error("Unauthorized");
         }
         const { adminPassword: _, ...eventData } = input;
+        // Fuzzy duplicate check: same gallery + same opening date or same address
+        const isDuplicate = await db.findDuplicateEvent(
+          eventData.galleryName,
+          eventData.openingDate,
+          eventData.address,
+          eventData.title
+        );
+        if (isDuplicate) {
+          return { id: null, skipped: true };
+        }
         const id = await db.createEvent(eventData);
-        return { id };
+        return { id, skipped: false };
       }),
 
     delete: publicProcedure
