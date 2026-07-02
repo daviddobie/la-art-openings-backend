@@ -106,6 +106,40 @@ function normalise(s: string): string {
     .trim();
 }
 
+/**
+ * Normalise a gallery name: strip location suffixes like "| Los Angeles", "- LA",
+ * "Los Angeles", "· Los Angeles" that different sources append after the real name.
+ */
+function galleryKey(name: string): string {
+  return normalise(
+    (name || '')
+      // Remove pipe/dash/dot separators followed by city names
+      .replace(/[|·\-–—]\s*(los angeles|la|west hollywood|culver city|santa monica|hollywood|dtla|downtown)\s*$/i, '')
+      // Remove trailing city names without separator
+      .replace(/\s+(los angeles|west hollywood|culver city|santa monica)\s*$/i, '')
+  );
+}
+
+// Generic words that appear in many gallery names and should not count as a match signal
+const GALLERY_STOP_WORDS = new Set(['gallery', 'art', 'space', 'studio', 'studios', 'projects', 'project', 'contemporary', 'fine', 'arts', 'center', 'centre', 'house', 'room', 'works', 'the', 'of', 'and', 'at', 'in']);
+
+/** Returns true if two gallery names refer to the same gallery */
+function sameGallery(a: string, b: string): boolean {
+  const ka = galleryKey(a);
+  const kb = galleryKey(b);
+  if (ka === kb) return true;
+  // One is a prefix of the other
+  if (ka.startsWith(kb) || kb.startsWith(ka)) return true;
+  // Word-overlap: extract meaningful (non-stop) words and check if they share enough
+  const wordsA = ka.split(' ').filter(w => w.length > 2 && !GALLERY_STOP_WORDS.has(w));
+  const wordsB = new Set(kb.split(' ').filter(w => w.length > 2 && !GALLERY_STOP_WORDS.has(w)));
+  if (wordsA.length === 0 || wordsB.size === 0) return false;
+  const shared = wordsA.filter(w => wordsB.has(w)).length;
+  // Require ALL meaningful words from the shorter name to appear in the longer name
+  const minLen = Math.min(wordsA.length, wordsB.size);
+  return shared >= minLen && minLen >= 1;
+}
+
 /** Extract just the street number + first word of street name from an address */
 function addressKey(addr: string): string {
   const m = addr.match(/(\d+)\s+([a-zA-Z]+)/);
@@ -117,12 +151,16 @@ function dateKey(d: string): string {
   if (!d) return '';
   // Already YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+  // Strip leading day-of-week (e.g. "Thursday, July 3, 2026 at 5:00 PM" → "July 3, 2026")
+  const stripped = d.replace(/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s*/i, '')
+                    .replace(/\s+at\s+\d{1,2}:\d{2}.*$/i, '')  // strip " at 5:00 PM"
+                    .replace(/\s+\d{1,2}:\d{2}.*$/i, '');       // strip bare time
   // Try parsing common formats like "July 11, 2026" or "Jul. 11, 2026"
   const months: Record<string, string> = {
     jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
     jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
   };
-  const m = d.match(/([a-zA-Z]+)\.?\s+(\d{1,2}),?\s+(\d{4})/);
+  const m = stripped.match(/([a-zA-Z]+)\.?\s+(\d{1,2}),?\s+(\d{4})/);
   if (m) {
     const mon = months[m[1].toLowerCase().slice(0, 3)] || '00';
     return `${m[3]}-${mon}-${m[2].padStart(2, '0')}`;
@@ -171,15 +209,15 @@ export async function findDuplicateEvent(
   const inAddr = addressKey(address);
 
   return all.some(row => {
-    const sameGallery = normalise(row.galleryName) === inGallery;
+    const galMatch = sameGallery(row.galleryName, galleryName);
     const sameDate = dateKey(row.openingDate) === inDate && inDate !== '';
     const sameAddr = addressKey(row.address) === inAddr && inAddr.length > 3;
     // All three hard signals match → always a duplicate
-    if (sameGallery && sameDate && sameAddr) return true;
+    if (galMatch && sameDate && sameAddr) return true;
     // Gallery + date match AND titles are similar → duplicate
-    if (sameGallery && sameDate && similarTitle(row.title, title)) return true;
+    if (galMatch && sameDate && similarTitle(row.title, title)) return true;
     // Gallery + address match AND titles are similar → duplicate
-    if (sameGallery && sameAddr && similarTitle(row.title, title)) return true;
+    if (galMatch && sameAddr && similarTitle(row.title, title)) return true;
     return false;
   });
 }
@@ -207,4 +245,61 @@ export async function deleteAllEvents() {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(events);
+}
+
+/**
+ * Delete all events whose opening date is strictly before today (LA time).
+ * openingDate is stored as YYYY-MM-DD, "Month D, YYYY", or similar text.
+ * We fetch all events and filter in JS using the same extractDateString logic
+ * to handle all stored formats consistently.
+ */
+export async function deleteExpiredEvents(): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Today in LA time (Pacific), formatted as YYYY-MM-DD
+  // Use Intl.DateTimeFormat parts to safely get the LA date without relying on
+  // toLocaleString() → new Date() round-trip which is unreliable on Node servers.
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(now);
+  const p: Record<string, string> = {};
+  for (const { type, value } of parts) p[type] = value;
+  const todayStr = `${p.year}-${p.month}-${p.day}`;
+
+  const allEvents = await db.select({ id: events.id, openingDate: events.openingDate }).from(events);
+
+  const expiredIds = allEvents
+    .filter((ev) => {
+      const d = ev.openingDate || "";
+      // Already YYYY-MM-DD
+      const isoMatch = d.match(/^(\d{4}-\d{2}-\d{2})/);
+      if (isoMatch) return isoMatch[1] < todayStr;
+      // Try to parse "Month D, YYYY" style
+      const months: Record<string, string> = {
+        january: "01", jan: "01", february: "02", feb: "02", march: "03", mar: "03",
+        april: "04", apr: "04", may: "05", june: "06", jun: "06", july: "07", jul: "07",
+        august: "08", aug: "08", september: "09", sep: "09", sept: "09",
+        october: "10", oct: "10", november: "11", nov: "11", december: "12", dec: "12",
+      };
+      const m = d.replace(/\b([A-Za-z]+)\.(?=\s)/g, "$1").match(/([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/);
+      if (m) {
+        const mon = months[m[1].toLowerCase()];
+        if (mon) {
+          const parsed = `${m[3]}-${mon}-${m[2].padStart(2, "0")}`;
+          return parsed < todayStr;
+        }
+      }
+      return false; // Can't parse — keep it
+    })
+    .map((ev) => ev.id);
+
+  if (expiredIds.length === 0) return 0;
+
+  for (const id of expiredIds) {
+    await db.delete(events).where(eq(events.id, id));
+  }
+  return expiredIds.length;
 }
