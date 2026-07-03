@@ -7,6 +7,7 @@ import { registerOAuthRoutes } from "./oauth";
 import { registerShareLandingRoute } from "./share-landing";
 import { handleCreateShare, handleGetShare } from "./share-api";
 import { startCleanupInterval } from "./share-storage";
+import { deleteExpiredEvents } from "../db";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 
@@ -166,6 +167,24 @@ async function startServer() {
   // Start cleanup interval for expired shares
   startCleanupInterval(24);
 
+  // Daily cleanup: delete past events at midnight LA time
+  function scheduleMidnightCleanup() {
+    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+    const midnight = new Date(now);
+    midnight.setHours(24, 0, 0, 0); // next midnight
+    const msUntilMidnight = midnight.getTime() - now.getTime();
+    setTimeout(async () => {
+      try {
+        const deleted = await deleteExpiredEvents();
+        if (deleted > 0) console.log(`[cleanup] Deleted ${deleted} expired event(s)`);
+      } catch (err) {
+        console.error("[cleanup] Failed to delete expired events:", err);
+      }
+      scheduleMidnightCleanup(); // reschedule for next midnight
+    }, msUntilMidnight);
+  }
+  scheduleMidnightCleanup();
+
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, timestamp: Date.now() });
   });
@@ -208,10 +227,10 @@ async function startServer() {
         return res.json({ results: localResults });
       }
 
-            // Try Photon (Komoot) — designed for autocomplete, no rate limit issues
+      // Try Photon (Komoot) — designed for autocomplete, no rate limit issues
       try {
-                const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(query )}&limit=8&lang=en&lat=34.05&lon=-118.24&bbox=-124.48,32.53,-114.13,42.01`;
-
+        // Restrict results to California (bbox: west,south,east,north) and bias to LA
+        const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=8&lang=en&lat=34.05&lon=-118.24&bbox=-124.48,32.53,-114.13,42.01`;
         const response = await fetch(photonUrl, {
           headers: { 'User-Agent': 'LA-Art-Openings-App' },
         });
@@ -229,6 +248,7 @@ async function startServer() {
                 const city = p.city || p.town || p.village || 'Los Angeles';
                 const state = p.state || 'CA';
                 const postcode = p.postcode || '';
+                // Build a clean display name: "Name, Street, City, State Zip"
                 const parts = [name, streetAddress, city, state && postcode ? `${state} ${postcode}` : state].filter(Boolean);
                 const displayName = parts.join(', ');
                 const addressLine = streetAddress || name || city;
@@ -244,13 +264,12 @@ async function startServer() {
                   lng: feature.geometry?.coordinates?.[0],
                 };
               })
-                           .filter((item: any) => {
+              .filter((item: any) => {
                 if (!item.displayName || item.displayName.length <= 3) return false;
                 // Hard-filter: only keep California results
                 const st = (item.state || '').toLowerCase();
                 return st === 'california' || st === 'ca';
               });
-
 
             if (results.length > 0) {
               geocodeCache.set(cacheKey, { results, timestamp: Date.now() });
@@ -261,8 +280,6 @@ async function startServer() {
       } catch (error) {
         console.error('Photon autocomplete error:', error);
       }
-
-
 
       // No results found
       res.json({ results: [] });
@@ -323,13 +340,14 @@ async function startServer() {
   app.post("/api/optimize-itinerary", async (req, res) => {
     try {
       const { stops } = req.body;
+      
       if (!Array.isArray(stops) || stops.length === 0) {
         return res.status(400).json({ error: "Invalid stops array" });
       }
 
       // Pre-calculate haversine distances between all stop pairs (in miles)
       function haversine(lat1: number, lng1: number, lat2: number, lng2: number): number {
-        const R = 3958.8;
+        const R = 3958.8; // Earth radius in miles
         const dLat = (lat2 - lat1) * Math.PI / 180;
         const dLng = (lng2 - lng1) * Math.PI / 180;
         const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
@@ -343,7 +361,7 @@ async function startServer() {
         })
         .join("\n");
 
-      // Build distance matrix so Groq doesn't need to estimate distances
+      // Build distance matrix string so Groq doesn't need to calculate
       let distanceMatrix = '';
       if (hasCoords) {
         const lines: string[] = [];
@@ -387,6 +405,7 @@ Respond with ONLY a JSON object:
 
 The "order" array must contain EXACTLY ${stopCount} numbers, each between 1 and ${stopCount}, with no duplicates and no omissions.`;
 
+      // Call the Groq LLM service
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -395,17 +414,23 @@ The "order" array must contain EXACTLY ${stopCount} numbers, each between 1 and 
         },
         body: JSON.stringify({
           model: "llama-3.3-70b-versatile",
-          messages: [{ role: "user", content: prompt }],
+          messages: [
+            {
+              role: "user",
+              content: prompt
+            }
+          ],
           temperature: 0.1,
-          max_tokens: 600
-        } )
+          max_tokens: 500
+        })
       });
 
       if (!response.ok) {
         const errorText = await response.text();
         console.warn(`AI optimization failed (${response.status}):`, errorText);
+        console.warn(`GROQ_API_KEY present: ${!!process.env.GROQ_API_KEY}`);
         return res.json({
-          order: stops.map((_: any, idx: number) => idx),
+          order: stops.map((_, idx) => idx),
           reasoning: "Could not optimize - using original order"
         });
       }
@@ -413,28 +438,35 @@ The "order" array must contain EXACTLY ${stopCount} numbers, each between 1 and 
       const data = await response.json();
       const content = data.choices?.[0]?.message?.content || "";
 
-      // Extract JSON — handle multi-line responses
+      // Parse the JSON response — handle multi-line JSON from Groq
       let result: any = null;
       try {
         const jsonMatch = content.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) throw new Error('No JSON found');
-        result = JSON.parse(jsonMatch[0]);
+        if (jsonMatch) {
+          result = JSON.parse(jsonMatch[0]);
+        }
       } catch (parseErr) {
-        console.warn("Could not parse AI response:", content);
+        console.warn("Could not parse AI response JSON:", parseErr);
+      }
+      if (!result || !Array.isArray(result.order)) {
+        console.warn("Could not parse AI response, returning original order. Content:", content);
         return res.json({
           order: stops.map((_: any, idx: number) => idx),
           reasoning: "Could not parse AI response"
         });
       }
-
+      // Convert 1-indexed to 0-indexed
       const rawOrder: number[] = result.order.map((n: number) => n - 1);
-      const validIndices = new Set(stops.map((_: any, i: number) => i));
+      
+      // Validate: must have exactly the right number of unique valid indices
+      const validIndices = new Set(stops.map((_, i) => i));
       const uniqueOrder = [...new Set(rawOrder)].filter(i => validIndices.has(i));
-
+      
+      // If validation fails, fall back to original order
       if (uniqueOrder.length !== stops.length) {
         console.warn(`[Groq] Invalid order length: got ${uniqueOrder.length}, expected ${stops.length}. Falling back.`);
         return res.json({
-          order: stops.map((_: any, idx: number) => idx),
+          order: stops.map((_, idx) => idx),
           reasoning: "Could not validate AI response - using original order"
         });
       }
@@ -452,7 +484,6 @@ The "order" array must contain EXACTLY ${stopCount} numbers, each between 1 and 
       });
     }
   });
-
 
   app.use(
     "/api/trpc",
