@@ -36,6 +36,7 @@ export const appRouter = router({
           imageUrl: z.string().optional(),
           lat: z.string().optional(),
           lng: z.string().optional(),
+          galleryWebsite: z.string().optional(),
           adminPassword: z.string(),
         })
       )
@@ -87,6 +88,7 @@ export const appRouter = router({
           openingTime: z.string().optional(),
           bodyText: z.string().optional(),
           imageUrl: z.string().optional(),
+          galleryWebsite: z.string().optional(),
           adminPassword: z.string(),
         })
       )
