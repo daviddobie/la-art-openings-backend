@@ -38,6 +38,7 @@ export const events = mysqlTable("events", {
   imageUrl: text("imageUrl"),
   lat: varchar("lat", { length: 32 }),
   lng: varchar("lng", { length: 32 }),
+  galleryWebsite: varchar("galleryWebsite", { length: 512 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
