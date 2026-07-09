@@ -143,10 +143,8 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-  // Serve static files for universal links and app links
-  app.use(express.static("public"));
-
-  // Serve universal link files with correct content type
+  // Serve universal link files with correct content type BEFORE express.static
+  // (express.static intercepts first and serves as application/octet-stream otherwise)
   app.get("/.well-known/apple-app-site-association", (req, res) => {
     res.setHeader("Content-Type", "application/json");
     res.sendFile("public/.well-known/apple-app-site-association", { root: process.cwd() });
@@ -156,6 +154,9 @@ async function startServer() {
     res.setHeader("Content-Type", "application/json");
     res.sendFile("public/.well-known/assetlinks.json", { root: process.cwd() });
   });
+
+  // Serve other static files
+  app.use(express.static("public"));
 
   registerOAuthRoutes(app);
   registerShareLandingRoute(app, process.env.APP_SCHEME || "manus20260411181801");
