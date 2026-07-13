@@ -100,6 +100,9 @@ export async function getAllEvents() {
 /** Normalise a string for fuzzy comparison: lowercase, strip punctuation/extra spaces */
 function normalise(s: string): string {
   return (s || '')
+    // Decompose accented characters (e.g. ö → o + combining diaeresis) then strip combining marks
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9 ]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -140,10 +143,30 @@ function sameGallery(a: string, b: string): boolean {
   return shared >= minLen && minLen >= 1;
 }
 
+/** Common street-direction and type abbreviations used in LA addresses */
+function expandStreetAbbreviations(addr: string): string {
+  return addr
+    // Direction abbreviations (word-boundary safe)
+    .replace(/\bN\.?\b/gi, 'North')
+    .replace(/\bS\.?\b/gi, 'South')
+    .replace(/\bE\.?\b/gi, 'East')
+    .replace(/\bW\.?\b/gi, 'West')
+    // Street type abbreviations
+    .replace(/\bBlvd\.?\b/gi, 'Boulevard')
+    .replace(/\bAve\.?\b/gi, 'Avenue')
+    .replace(/\bSt\.?\b/gi, 'Street')
+    .replace(/\bDr\.?\b/gi, 'Drive')
+    .replace(/\bRd\.?\b/gi, 'Road')
+    .replace(/\bPl\.?\b/gi, 'Place')
+    .replace(/\bCt\.?\b/gi, 'Court')
+    .replace(/\bLn\.?\b/gi, 'Lane');
+}
+
 /** Extract just the street number + first word of street name from an address */
 function addressKey(addr: string): string {
-  const m = addr.match(/(\d+)\s+([a-zA-Z]+)/);
-  return m ? `${m[1]} ${m[2].toLowerCase()}` : normalise(addr).slice(0, 20);
+  const expanded = expandStreetAbbreviations(addr);
+  const m = expanded.match(/(\d+)\s+([a-zA-Z]+)/);
+  return m ? `${m[1]} ${m[2].toLowerCase()}` : normalise(expanded).slice(0, 20);
 }
 
 /** Normalise a date string to YYYY-MM-DD or a comparable token */
