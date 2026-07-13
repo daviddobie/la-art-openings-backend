@@ -183,32 +183,34 @@ function similarTitle(a: string, b: string): boolean {
 }
 
 /**
- * Check if a near-duplicate of this event already exists.
+ * Find a near-duplicate of this event.
  *
- * Skip if:
+ * Returns the matching event's ID if found, or null.
+ * Matches on:
  *   - gallery name + date + address all match (exact fuzzy), regardless of title
- *   - gallery name + date + address all match AND titles are similar
+ *   - gallery name + date match AND titles are similar
+ *   - gallery name + address match AND titles are similar
  */
 export async function findDuplicateEvent(
   galleryName: string,
   openingDate: string,
   address: string,
   title: string
-): Promise<boolean> {
+): Promise<number | null> {
   const db = await getDb();
-  if (!db) return false;
+  if (!db) return null;
   const all = await db.select({
+    id: events.id,
     galleryName: events.galleryName,
     openingDate: events.openingDate,
     address: events.address,
     title: events.title,
   }).from(events);
 
-  const inGallery = normalise(galleryName);
   const inDate = dateKey(openingDate);
   const inAddr = addressKey(address);
 
-  return all.some(row => {
+  const match = all.find(row => {
     const galMatch = sameGallery(row.galleryName, galleryName);
     const sameDate = dateKey(row.openingDate) === inDate && inDate !== '';
     const sameAddr = addressKey(row.address) === inAddr && inAddr.length > 3;
@@ -220,6 +222,8 @@ export async function findDuplicateEvent(
     if (galMatch && sameAddr && similarTitle(row.title, title)) return true;
     return false;
   });
+
+  return match ? match.id : null;
 }
 
 export async function createEvent(data: InsertEvent) {
@@ -227,6 +231,13 @@ export async function createEvent(data: InsertEvent) {
   if (!db) throw new Error("Database not available");
   const result = await db.insert(events).values(data);
   return (result as any).insertId as number;
+}
+
+export async function getEventById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(events).where(eq(events.id, id)).limit(1);
+  return rows[0] ?? null;
 }
 
 export async function deleteEvent(id: number) {
