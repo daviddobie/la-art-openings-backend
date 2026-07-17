@@ -305,20 +305,19 @@ async function startServer() {
       }
 
       const base64Data = body.imageData.replace(/^data:[^;]+;base64,/, "");
-      const buffer = Buffer.from(base64Data, "base64");
       const contentType = body.contentType || "image/jpeg";
       const ext = contentType.split("/")[1] || "jpg";
       const fileName = body.fileName || `event-${Date.now()}.${ext}`;
 
-      const FormDataPackage = (await import("form-data")).default;
-      const formData = new FormDataPackage();
-      formData.append("image", buffer, { filename: fileName, contentType });
-      formData.append("password", adminPassword);
-
-      const uploadResponse = await fetch("https://thelosangelesartgallery.com/upload.php", {
+      // PHP script expects JSON with base64 image string
+      const uploadResponse = await fetch("https://thelosangelesartgallery.com/thelosangelesartgallery/upload.php", {
         method: "POST",
-        headers: formData.getHeaders(),
-        body: formData as any,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: base64Data,
+          password: adminPassword,
+          fileName,
+        }),
       });
 
       if (!uploadResponse.ok) {
