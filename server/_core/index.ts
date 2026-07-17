@@ -310,7 +310,7 @@ async function startServer() {
       const fileName = body.fileName || `event-${Date.now()}.${ext}`;
 
       // PHP script expects JSON with base64 image string
-      const uploadResponse = await fetch("https://thelosangelesartgallery.com/thelosangelesartgallery/upload.php", {
+      const uploadResponse = await fetch("https://thelosangelesartgallery.com/upload.php", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
