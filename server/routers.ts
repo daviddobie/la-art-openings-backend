@@ -34,6 +34,7 @@ export const appRouter = router({
           openingTime: z.string().optional(),
           bodyText: z.string().optional(),
           imageUrl: z.string().optional(),
+          galleryWebsite: z.string().optional(),
           lat: z.string().optional(),
           lng: z.string().optional(),
           adminPassword: z.string(),
@@ -61,6 +62,7 @@ export const appRouter = router({
             if (!existing.openingTime && eventData.openingTime) mergeFields.openingTime = eventData.openingTime;
             if (!existing.bodyText && eventData.bodyText) mergeFields.bodyText = eventData.bodyText;
             if (!existing.imageUrl && eventData.imageUrl) mergeFields.imageUrl = eventData.imageUrl;
+            if (!existing.galleryWebsite && eventData.galleryWebsite) mergeFields.galleryWebsite = eventData.galleryWebsite;
             if (!existing.lat && eventData.lat) mergeFields.lat = eventData.lat;
             if (!existing.lng && eventData.lng) mergeFields.lng = eventData.lng;
           }
@@ -94,14 +96,15 @@ export const appRouter = router({
       .input(
         z.object({
           id: z.coerce.number().int().positive(),
-          title: z.string().min(1).max(512),
-          galleryName: z.string().min(1).max(255),
-          address: z.string().min(1),
-          openingDate: z.string().min(1),
+          title: z.string().min(1).max(512).optional(),
+          galleryName: z.string().min(1).max(255).optional(),
+          address: z.string().min(1).optional(),
+          openingDate: z.string().min(1).optional(),
           endDate: z.string().optional(),
           openingTime: z.string().optional(),
           bodyText: z.string().optional(),
           imageUrl: z.string().optional(),
+          galleryWebsite: z.string().optional(),
           adminPassword: z.string(),
         })
       )
