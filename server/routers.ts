@@ -192,6 +192,46 @@ export const appRouter = router({
         }
       }),
   }),
+
+  // Image proxy: download images from blocked domains and re-host on Green Geeks
+  images: router({
+    proxyBlockedImage: publicProcedure
+      .input(z.object({ imageUrl: z.string().url() }))
+      .mutation(async ({ input }) => {
+        try {
+          // Download the image from the blocked domain
+          const response = await fetch(input.imageUrl);
+          if (!response.ok) throw new Error(`Failed to fetch image: ${response.statusText}`);
+          
+          const buffer = await response.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString('base64');
+          
+          // Generate a unique filename based on the URL
+          const urlHash = require('crypto').createHash('md5').update(input.imageUrl).digest('hex');
+          const ext = input.imageUrl.split('.').pop()?.split('?')[0] || 'jpg';
+          const filename = `${urlHash}.${ext}`;
+          
+          // Send to Green Geeks to save
+          const ggResponse = await fetch('https://thelosangelesartgallery.com/image-save.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              filename,
+              base64,
+              adminPassword: process.env.ADMIN_PASSWORD || 'laartadmin2024',
+            }),
+          });
+          
+          if (!ggResponse.ok) throw new Error('Failed to save image on Green Geeks');
+          const result = await ggResponse.json();
+          
+          return { imageUrl: result.imageUrl };
+        } catch (error) {
+          console.error('Image proxy error:', error);
+          throw new Error(`Image proxy failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;
