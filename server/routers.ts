@@ -1,4 +1,5 @@
 import { COOKIE_NAME } from "../shared/const.js";
+import { createHash } from "crypto";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
@@ -207,7 +208,7 @@ export const appRouter = router({
           const base64 = Buffer.from(buffer).toString('base64');
           
           // Generate a unique filename based on the URL
-          const urlHash = require('crypto').createHash('md5').update(input.imageUrl).digest('hex');
+          const urlHash = createHash('md5').update(input.imageUrl).digest('hex');
           const ext = input.imageUrl.split('.').pop()?.split('?')[0] || 'jpg';
           const filename = `${urlHash}.${ext}`;
           
