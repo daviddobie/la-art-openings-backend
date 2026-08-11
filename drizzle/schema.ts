@@ -49,7 +49,7 @@ export type InsertEvent = typeof events.$inferInsert;
 // One gallery favorite per device. Device identifiers are generated locally and
 // allow community totals without requiring an account sign-in flow.
 export const galleryFavorites = mysqlTable(
-  "gallery_favorites",
+  "gallery_favorite",
   {
     id: int("id").autoincrement().primaryKey(),
     galleryName: varchar("galleryName", { length: 255 }).notNull(),
