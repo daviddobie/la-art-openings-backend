@@ -197,20 +197,39 @@ export async function setGalleryFavorite(galleryName: string, deviceId: string, 
     return;
   }
 
+  const existing = await db
+    .select({ id: galleryFavorites.id })
+    .from(galleryFavorites)
+    .where(and(eq(galleryFavorites.galleryName, galleryName), eq(galleryFavorites.deviceId, deviceId)))
+    .limit(1);
+  if (existing.length > 0) return;
+
   await db
     .insert(galleryFavorites)
-    .values({ galleryName, deviceId })
-    .onDuplicateKeyUpdate({ set: { galleryName } });
+    .values({ galleryName, deviceId, createdAt: new Date() });
 }
 
 export async function setEventRating(eventId: number, deviceId: string, rating: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  const now = new Date();
+  const existing = await db
+    .select({ id: eventRatings.id })
+    .from(eventRatings)
+    .where(and(eq(eventRatings.eventId, eventId), eq(eventRatings.deviceId, deviceId)))
+    .limit(1);
+
+  if (existing.length > 0) {
+    await db
+      .update(eventRatings)
+      .set({ rating, updatedAt: now })
+      .where(eq(eventRatings.id, existing[0].id));
+    return;
+  }
 
   await db
     .insert(eventRatings)
-    .values({ eventId, deviceId, rating })
-    .onDuplicateKeyUpdate({ set: { rating, updatedAt: new Date() } });
+    .values({ eventId, deviceId, rating, createdAt: now, updatedAt: now });
 }
 
 /** Normalise a string for fuzzy comparison: lowercase, strip punctuation/extra spaces */
