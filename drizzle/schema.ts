@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -45,3 +45,35 @@ export const events = mysqlTable("events", {
 
 export type Event = typeof events.$inferSelect;
 export type InsertEvent = typeof events.$inferInsert;
+
+// One gallery favorite per device. Device identifiers are generated locally and
+// allow community totals without requiring an account sign-in flow.
+export const galleryFavorites = mysqlTable(
+  "gallery_favorites",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    galleryName: varchar("galleryName", { length: 255 }).notNull(),
+    deviceId: varchar("deviceId", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("gallery_favorites_gallery_device_unique").on(table.galleryName, table.deviceId)],
+);
+
+export type GalleryFavorite = typeof galleryFavorites.$inferSelect;
+
+// One 1–5 rating per device and opening. Updating a rating overwrites that
+// device's previous score so community totals are not inflated by re-rating.
+export const eventRatings = mysqlTable(
+  "event_ratings",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    eventId: int("eventId").notNull(),
+    deviceId: varchar("deviceId", { length: 64 }).notNull(),
+    rating: int("rating").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [uniqueIndex("event_ratings_event_device_unique").on(table.eventId, table.deviceId)],
+);
+
+export type EventRating = typeof eventRatings.$inferSelect;
