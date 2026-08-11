@@ -1,6 +1,13 @@
-import { eq, desc } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, events, InsertEvent } from "../drizzle/schema";
+import {
+  eventRatings,
+  events,
+  galleryFavorites,
+  InsertEvent,
+  InsertUser,
+  users,
+} from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -95,6 +102,115 @@ export async function getAllEvents() {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(events).orderBy(desc(events.createdAt));
+}
+
+export type CommunityStats = {
+  galleries: Array<{ galleryName: string; favoriteCount: number; isFavorited: boolean }>;
+  events: Array<{ eventId: number; ratingAverage: number; ratingCount: number; myRating: number | null }>;
+};
+
+export async function getCommunityStats(
+  galleryNames: string[],
+  eventIds: number[],
+  deviceId: string,
+): Promise<CommunityStats> {
+  const db = await getDb();
+  const uniqueGalleryNames = [...new Set(galleryNames.filter(Boolean))];
+  const uniqueEventIds = [...new Set(eventIds.filter((id) => Number.isInteger(id) && id > 0))];
+
+  if (!db) {
+    return {
+      galleries: uniqueGalleryNames.map((galleryName) => ({ galleryName, favoriteCount: 0, isFavorited: false })),
+      events: uniqueEventIds.map((eventId) => ({ eventId, ratingAverage: 0, ratingCount: 0, myRating: null })),
+    };
+  }
+
+  const [favoriteRows, deviceFavoriteRows, ratingRows, deviceRatingRows] = await Promise.all([
+    uniqueGalleryNames.length
+      ? db
+          .select({
+            galleryName: galleryFavorites.galleryName,
+            favoriteCount: sql<number>`count(*)`,
+          })
+          .from(galleryFavorites)
+          .where(inArray(galleryFavorites.galleryName, uniqueGalleryNames))
+          .groupBy(galleryFavorites.galleryName)
+      : Promise.resolve([]),
+    uniqueGalleryNames.length
+      ? db
+          .select({ galleryName: galleryFavorites.galleryName })
+          .from(galleryFavorites)
+          .where(and(inArray(galleryFavorites.galleryName, uniqueGalleryNames), eq(galleryFavorites.deviceId, deviceId)))
+      : Promise.resolve([]),
+    uniqueEventIds.length
+      ? db
+          .select({
+            eventId: eventRatings.eventId,
+            ratingCount: sql<number>`count(*)`,
+            ratingAverage: sql<number>`coalesce(avg(${eventRatings.rating}), 0)`,
+          })
+          .from(eventRatings)
+          .where(inArray(eventRatings.eventId, uniqueEventIds))
+          .groupBy(eventRatings.eventId)
+      : Promise.resolve([]),
+    uniqueEventIds.length
+      ? db
+          .select({ eventId: eventRatings.eventId, rating: eventRatings.rating })
+          .from(eventRatings)
+          .where(and(inArray(eventRatings.eventId, uniqueEventIds), eq(eventRatings.deviceId, deviceId)))
+      : Promise.resolve([]),
+  ]);
+
+  const favoriteCountByGallery = new Map(favoriteRows.map((row) => [row.galleryName, Number(row.favoriteCount)]));
+  const favoritedGalleryNames = new Set(deviceFavoriteRows.map((row) => row.galleryName));
+  const ratingByEvent = new Map(
+    ratingRows.map((row) => [
+      row.eventId,
+      { ratingCount: Number(row.ratingCount), ratingAverage: Number(row.ratingAverage) },
+    ]),
+  );
+  const myRatingByEvent = new Map(deviceRatingRows.map((row) => [row.eventId, row.rating]));
+
+  return {
+    galleries: uniqueGalleryNames.map((galleryName) => ({
+      galleryName,
+      favoriteCount: favoriteCountByGallery.get(galleryName) ?? 0,
+      isFavorited: favoritedGalleryNames.has(galleryName),
+    })),
+    events: uniqueEventIds.map((eventId) => ({
+      eventId,
+      ratingCount: ratingByEvent.get(eventId)?.ratingCount ?? 0,
+      ratingAverage: ratingByEvent.get(eventId)?.ratingAverage ?? 0,
+      myRating: myRatingByEvent.get(eventId) ?? null,
+    })),
+  };
+}
+
+export async function setGalleryFavorite(galleryName: string, deviceId: string, favorite: boolean) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  if (!favorite) {
+    await db
+      .delete(galleryFavorites)
+      .where(and(eq(galleryFavorites.galleryName, galleryName), eq(galleryFavorites.deviceId, deviceId)));
+    return;
+  }
+
+  await db
+    .insert(galleryFavorites)
+    .values({ galleryName, deviceId })
+    .onDuplicateKeyUpdate({ set: { galleryName } });
+}
+
+export async function setEventRating(eventId: number, deviceId: string, rating: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  await db
+    .insert(eventRatings)
+    .values({ eventId, deviceId, rating })
+    .onDuplicateKeyUpdate({ set: { rating, updatedAt: new Date() } });
 }
 
 /** Normalise a string for fuzzy comparison: lowercase, strip punctuation/extra spaces */
@@ -303,7 +419,8 @@ export async function deleteExpiredEvents(): Promise<number> {
   for (const { type, value } of parts) p[type] = value;
   const todayStr = `${p.year}-${p.month}-${p.day}`;
 
-  const allEvents = await db.select({ id: events.id, openingDate: events.openingDate }).from(events);
+  // Fetch all events with their imageUrl so we can delete images when events expire
+  const allEvents = await db.select({ id: events.id, openingDate: events.openingDate, imageUrl: events.imageUrl }).from(events);
 
   const expiredIds = allEvents
     .filter((ev) => {
@@ -332,8 +449,39 @@ export async function deleteExpiredEvents(): Promise<number> {
 
   if (expiredIds.length === 0) return 0;
 
-  for (const id of expiredIds) {
-    await db.delete(events).where(eq(events.id, id));
+  // Get the expired events with their imageUrls before deleting
+  const expiredEvents = allEvents.filter(ev => expiredIds.includes(ev.id));
+
+  for (const event of expiredEvents) {
+    // Delete image from GreenGeeks server if it exists
+    if (event.imageUrl && event.imageUrl.includes('thelosangelesartgallery.com')) {
+      try {
+        // Extract filename from URL (e.g., "https://thelosangelesartgallery.com/images/12345.jpg" → "12345.jpg")
+        const urlParts = event.imageUrl.split('/');
+        const filename = urlParts[urlParts.length - 1];
+        
+        // Call image-delete.php on GreenGeeks server
+        const deleteResponse = await fetch('https://thelosangelesartgallery.com/image-delete.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: filename,
+            adminPassword: process.env.GREENGEEKS_ADMIN_PASSWORD || '',
+          }),
+        });
+        
+        if (deleteResponse.ok) {
+          console.log(`[cleanup] Deleted image: ${filename}`);
+        } else {
+          console.warn(`[cleanup] Failed to delete image ${filename}: ${deleteResponse.status}`);
+        }
+      } catch (error) {
+        console.error(`[cleanup] Error deleting image for event ${event.id}:`, error);
+      }
+    }
+    
+    // Delete event from database
+    await db.delete(events).where(eq(events.id, event.id));
   }
   return expiredIds.length;
 }

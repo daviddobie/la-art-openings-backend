@@ -24,6 +24,26 @@ export const appRouter = router({
       return { events: items };
     }),
 
+    checkExists: publicProcedure
+      .input(
+        z.object({
+          galleryName: z.string(),
+          openingDate: z.string(),
+          address: z.string(),
+          title: z.string(),
+        })
+      )
+      .query(async ({ input }) => {
+        const duplicateId = await db.findDuplicateEvent(
+          input.galleryName,
+          input.openingDate,
+          input.address,
+          input.title
+        );
+        return { exists: duplicateId !== null, id: duplicateId };
+      }),
+
+
     create: publicProcedure
       .input(
         z.object({
@@ -138,6 +158,44 @@ export const appRouter = router({
           throw new Error("Unauthorized");
         }
         await db.deleteAllEvents();
+        return { success: true };
+      }),
+  }),
+
+  community: router({
+    getStats: publicProcedure
+      .input(
+        z.object({
+          deviceId: z.string().min(16).max(64),
+          galleryNames: z.array(z.string().min(1).max(255)).max(100),
+          eventIds: z.array(z.number().int().positive()).max(100),
+        }),
+      )
+      .query(({ input }) => db.getCommunityStats(input.galleryNames, input.eventIds, input.deviceId)),
+
+    setGalleryFavorite: publicProcedure
+      .input(
+        z.object({
+          deviceId: z.string().min(16).max(64),
+          galleryName: z.string().min(1).max(255),
+          favorite: z.boolean(),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        await db.setGalleryFavorite(input.galleryName, input.deviceId, input.favorite);
+        return { success: true };
+      }),
+
+    setEventRating: publicProcedure
+      .input(
+        z.object({
+          deviceId: z.string().min(16).max(64),
+          eventId: z.number().int().positive(),
+          rating: z.number().int().min(1).max(5),
+        }),
+      )
+      .mutation(async ({ input }) => {
+        await db.setEventRating(input.eventId, input.deviceId, input.rating);
         return { success: true };
       }),
   }),
