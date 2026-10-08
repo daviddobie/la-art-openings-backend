@@ -212,11 +212,33 @@ export async function setGalleryFavorite(galleryName: string, deviceId: string, 
 export async function getFavoriteGalleries(deviceId: string) {
   const db = await getDb();
   if (!db) return [];
-  return db
+  const favorites = await db
     .select({ galleryName: galleryFavorites.galleryName, createdAt: galleryFavorites.createdAt })
     .from(galleryFavorites)
     .where(eq(galleryFavorites.deviceId, deviceId))
     .orderBy(desc(galleryFavorites.createdAt));
+
+  const eventMetadata = await db
+    .select({
+      galleryName: events.galleryName,
+      address: events.address,
+      galleryWebsite: events.galleryWebsite,
+      lat: events.lat,
+      lng: events.lng,
+      updatedAt: events.updatedAt,
+    })
+    .from(events)
+    .orderBy(desc(events.updatedAt));
+
+  return Promise.all(
+    favorites.map(async (favorite) => {
+      const favoriteKey = galleryKey(favorite.galleryName);
+      const matchingEvent = eventMetadata.find(
+        (event) => galleryKey(event.galleryName) === favoriteKey,
+      );
+      return { ...favorite, ...(matchingEvent ?? {}) };
+    }),
+  );
 }
 
 export async function setEventRating(eventId: number, deviceId: string, rating: number) {
@@ -426,19 +448,65 @@ export async function deleteAllEvents() {
   await db.delete(events);
 }
 
+type CleanupEvent = {
+  id: number;
+  openingDate: string;
+  galleryName: string;
+  imageUrl: string | null;
+};
+
+function isBeforeDate(openingDate: string, todayStr: string): boolean {
+  const d = openingDate || "";
+  const isoMatch = d.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch) return isoMatch[1] < todayStr;
+
+  const months: Record<string, string> = {
+    january: "01", jan: "01", february: "02", feb: "02", march: "03", mar: "03",
+    april: "04", apr: "04", may: "05", june: "06", jun: "06", july: "07", jul: "07",
+    august: "08", aug: "08", september: "09", sep: "09", sept: "09",
+    october: "10", oct: "10", november: "11", nov: "11", december: "12", dec: "12",
+  };
+  const match = d.replace(/\b([A-Za-z]+)\.(?=\s)/g, "$1").match(/([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/);
+  if (!match) return false; // Can't parse — keep it rather than risk deleting it.
+
+  const month = months[match[1].toLowerCase()];
+  return !!month && `${match[3]}-${month}-${match[2].padStart(2, "0")}` < todayStr;
+}
+
 /**
- * Delete all events whose opening date is strictly before today (LA time).
+ * Return only past events that have no community reference. Events with a
+ * rating, or events from a currently favorited gallery, remain in the database
+ * for historical ratings and favorite-gallery details. Saved itineraries are
+ * device-local and retain their own stop details independently of this cleanup.
+ */
+export function getDeletableExpiredEventIds(
+  allEvents: CleanupEvent[],
+  ratedEventIds: ReadonlySet<number>,
+  favoritedGalleryNames: ReadonlySet<string>,
+  todayStr: string,
+): number[] {
+  const favoriteGalleryKeys = new Set(
+    [...favoritedGalleryNames].filter(Boolean).map(galleryKey),
+  );
+
+  return allEvents
+    .filter((event) => (
+      isBeforeDate(event.openingDate, todayStr)
+      && !ratedEventIds.has(event.id)
+      && !favoriteGalleryKeys.has(galleryKey(event.galleryName))
+    ))
+    .map((event) => event.id);
+}
+
+/**
+ * Delete past events that are not retained by a rating or gallery favorite.
  * openingDate is stored as YYYY-MM-DD, "Month D, YYYY", or similar text.
- * We fetch all events and filter in JS using the same extractDateString logic
- * to handle all stored formats consistently.
  */
 export async function deleteExpiredEvents(): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // Today in LA time (Pacific), formatted as YYYY-MM-DD
-  // Use Intl.DateTimeFormat parts to safely get the LA date without relying on
-  // toLocaleString() → new Date() round-trip which is unreliable on Node servers.
+  // Today in LA time (Pacific), formatted as YYYY-MM-DD.
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Los_Angeles",
@@ -448,33 +516,26 @@ export async function deleteExpiredEvents(): Promise<number> {
   for (const { type, value } of parts) p[type] = value;
   const todayStr = `${p.year}-${p.month}-${p.day}`;
 
-  // Fetch all events with their imageUrl so we can delete images when events expire
-  const allEvents = await db.select({ id: events.id, openingDate: events.openingDate, imageUrl: events.imageUrl }).from(events);
-
-  const expiredIds = allEvents
-    .filter((ev) => {
-      const d = ev.openingDate || "";
-      // Already YYYY-MM-DD
-      const isoMatch = d.match(/^(\d{4}-\d{2}-\d{2})/);
-      if (isoMatch) return isoMatch[1] < todayStr;
-      // Try to parse "Month D, YYYY" style
-      const months: Record<string, string> = {
-        january: "01", jan: "01", february: "02", feb: "02", march: "03", mar: "03",
-        april: "04", apr: "04", may: "05", june: "06", jun: "06", july: "07", jul: "07",
-        august: "08", aug: "08", september: "09", sep: "09", sept: "09",
-        october: "10", oct: "10", november: "11", nov: "11", december: "12", dec: "12",
-      };
-      const m = d.replace(/\b([A-Za-z]+)\.(?=\s)/g, "$1").match(/([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/);
-      if (m) {
-        const mon = months[m[1].toLowerCase()];
-        if (mon) {
-          const parsed = `${m[3]}-${mon}-${m[2].padStart(2, "0")}`;
-          return parsed < todayStr;
-        }
-      }
-      return false; // Can't parse — keep it
-    })
-    .map((ev) => ev.id);
+  // Fetch image data before deletion, plus the community references that protect
+  // history from the daily cleanup.
+  const [allEvents, ratingRows, favoriteRows] = await Promise.all([
+    db.select({
+      id: events.id,
+      openingDate: events.openingDate,
+      galleryName: events.galleryName,
+      imageUrl: events.imageUrl,
+    }).from(events),
+    db.select({ eventId: eventRatings.eventId }).from(eventRatings),
+    db.select({ galleryName: galleryFavorites.galleryName }).from(galleryFavorites),
+  ]);
+  const ratedEventIds = new Set(ratingRows.map((row) => row.eventId));
+  const favoritedGalleryNames = new Set(favoriteRows.map((row) => row.galleryName));
+  const expiredIds = getDeletableExpiredEventIds(
+    allEvents,
+    ratedEventIds,
+    favoritedGalleryNames,
+    todayStr,
+  );
 
   if (expiredIds.length === 0) return 0;
 
